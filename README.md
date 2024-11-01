@@ -1,0 +1,1 @@
+# Streamlined-Security-Cloud-Armor-Preconfigured-Web-Application-Firewall-Rules
