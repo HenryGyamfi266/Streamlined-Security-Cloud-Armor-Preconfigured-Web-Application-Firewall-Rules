@@ -1,0 +1,94 @@
+**Task1**-Creating VPC Network
+1. I created a VPC Netwrk using the code below on the google cloud shell:
+# gcloud compute networks create Network Name --subnet-mode custom
+2. Entered the following code to create a subnet:
+# gcloud compute networks subnets create Subnet Name \ --network Network Name --range 10.0.0.0/24 --region Region
+Now, I create the VPC firewall rules.
+The first firewall rule,allow-js-site, allows all IPs to access the external IP of the test application's website on port 3000.
+The second firewall rule,allow-health-check, allows health-checks from source IP of the load balancers.
+3. Entered the code below to create a firewall rule to allow all IPs to access the application:
+# gcloud compute firewall-rules create Firewall Name --allow tcp:3000 --network Network Name
+4. Entered the code below to create firewall rule to allow health-checks from the Google health-check ranges:
+# gcloud compute firewall-rules create Firewall Name1 \
+    --network=Network Name \
+    --action=allow \
+    --direction=ingress \
+    --source-ranges=130.211.0.0/22,35.191.0.0/16 \
+    --target-tags=allow-healthcheck \
+    --rules=tcpf
+Firewalls have now been successfully created.
+
+**Task2** - Setting up the test Application
+In this step, I set up the OWASP Juice Shop web server as the test application. By creating a compute instance with a container image, I ensured the server includes the required services. 
+The server is deployed in the specified Zone and assigned a network tag to enable health checks.
+1. I used the code below to set up the application:
+gcloud compute instances create-with-container vm_instance --container-image bkimminich/juice-shop \
+     --network Network Name \
+     --subnet Subnet Name \
+     --private-network-ip=10.0.0.3 \
+     --machine-type n1-standard-2 \
+     --zone Zone \
+     --tags allow-healthcheck
+2. I then set up the Cloud load balancer component: instance group using the code below:
+# gcloud compute instance-groups unmanaged create Instance Group \ --zone=Zone
+3. Added the Juice Shop Google Compute Engine (GCE) instance to the unmanaged instance group with code:
+# gcloud compute instance-groups unmanaged add-instances Instance Group \ --zone=Zone \ --instances=VM Instance
+4. Then set the named port to that of the Juice Shop application:
+# gcloud compute instance-groups unmanaged set-named-ports \ Instance Group \ --named-ports=http:3000 \ --zone=Zone
+5. Then set up the Cloud load balancer component: health check with the code:
+# gcloud compute health-checks create tcp tcp-port-3000 \ --port 3000
+6. Set up the Cloud load balancer component: backend service with code:
+# gcloud compute backend-services create juice-shop-backend \ --protocol HTTP \ --port-name http \ --health-checks tcp-port-3000 \ --enable-logging \ --global
+7. Added the Juice Shop instance group to the backend service with code:
+# gcloud compute backend-services add-backend juice-shop-backend \ --instance-group=Instance Group \ --instance-group-zone=Zone \ --global
+8. Set up the Cloud load balancer component: URL map with code:
+# gcloud compute url-maps create juice-shop-loadbalancer \ --default-service juice-shop-backend
+9. Set up the Cloud load balancer component: target proxy with code: 
+# gcloud compute target-http-proxies create juice-shop-proxy \ --url-map juice-shop-loadbalancer
+10. Set up the Cloud load balancer component: forwarding rule with code:
+# gcloud compute forwarding-rules create juice-shop-rule \ --global \ --target-http-proxy=juice-shop-proxy \ --ports=80
+
+**Task3** - Demonstrating the known Vulnerabilities
+In this section, I show the states before and after Cloud Armor WAF rules are propagated in condensed steps
+1. First, I observe the LFI vulnerability: path traversal with the code:
+# curl -Ii http://$PUBLIC_SVC_IP/ftp
+2. Observed the RCE vulnerability with code:
+# $ curl -Ii http://$PUBLIC_SVC_IP/ftp?doc=/bin/ls
+3. Then, I observe a well-known scanner's access with code:
+# curl -Ii http://$PUBLIC_SVC_IP -H "User-Agent: blackwidow"
+4. Then,I observe a protocol attack: HTTP splitting with code:
+# curl -Ii "http://$PUBLIC_SVC_IP/index.html?foo=advanced%0d%0aContent-Length:%200%0d%0a%0d%0aHTTP/1.1%20200%20OK%0d%0aContent-Type:%20text/
+html%0d%0aContent-Length:%2035%0d%0a%0d%0a<html>Sorry,%20System%20Down</html>"
+5. Observe session fixation with code:
+# curl -Ii http://$PUBLIC_SVC_IP -H session_id=X
+
+**Task4** - Defining Cloud Armor WAF rules
+1. Started this part by listing the preconfigured WAF rules, using the following command in Cloud Shell:
+# gcloud compute security-policies list-preconfigured-expression-sets
+2. Created the Cloud Armor security policy using the following command in Cloud Shell:
+# gcloud compute security-policies create Policy Name \ --description "Block with OWASP ModSecurity CRS"
+3. In Cloud Shell, I updated the security policy default rule with code:
+# gcloud compute security-policies rules update 2147483647 \ --security-policy Policy Name \ --action "deny-403"
+Since the default rule is configured with action deny, I had to allow access from my IP
+4. Added the first rule to allow access from your IP:
+# gcloud compute security-policies rules create 10000 \ --security-policy Policy Name  \ --description "allow traffic from my IP" \ --src-ip-ranges "34.70.206.224" \ --action "allow"
+5. Then I updated the security policy to block LFI attacks with code:
+# gcloud compute security-policies rules create 9000 \ --security-policy Policy Name  \ --description "block local file inclusion" \--expression "evaluatePreconfiguredExpr('lfi-stable')" \ --action deny-403
+6. In Cloud Shell, I went on to update the security policy to block Remote Code Execution (rce) with code:
+# gcloud compute security-policies rules create 9001 \ --security-policy Policy Name  \ --description "block rce attacks" \ --expression "evaluatePreconfiguredExpr('rce-stable')" \ --action deny-403
+7. Then Updated the security policy to block security scanners with code:
+# gcloud compute security-policies rules create 9002 \ --security-policy Policy Name \ --description "block scanners" \ --expression "evaluatePreconfiguredExpr('scannerdetection-stable')" \ --action deny-403
+8. In Cloud Shell, updated the security policy to block protocol attacks with code:
+# gcloud compute security-policies rules create 9003 \ --security-policy Policy Name \ --description "block protocol attacks" \ --expression "evaluatePreconfiguredExpr('protocolattack-stable')" \
+--action deny-403
+9. Then updated the security policy to block session fixation with code:
+# gcloud compute security-policies rules create 9004 \ --security-policy Policy Name \ --description "block session fixation attacks" \ --expression "evaluatePreconfiguredExpr('sessionfixation-stable')" \
+--action deny-403
+10. Attached the security policy to the backend service with code:
+# gcloud compute backend-services update juice-shop-backend \ --security-policy Policy Name \ --global
+
+After this processes, i tested the vulnerabilities again. I found out that the LFI, RCE, session fixation attempts, and protocol attack have been mitigated. 
+
+
+
+
