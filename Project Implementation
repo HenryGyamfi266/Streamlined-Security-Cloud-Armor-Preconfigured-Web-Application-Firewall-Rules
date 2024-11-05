@@ -89,6 +89,8 @@ Since the default rule is configured with action deny, I had to allow access fro
 
 After this processes, i tested the vulnerabilities again. I found out that the LFI, RCE, session fixation attempts, and protocol attack have been mitigated. 
 
+Finally, observed the cloud armor security policy logs for verifications.
+
 
 
 
